@@ -15,6 +15,13 @@ Outputs (written to --output-dir):
                       original PYTHIA event index for each row of
                       splittings_k.npy (so the same event can be tracked
                       across snapshot files).
+    event_record.npz  full per-particle PYTHIA event listing, flat-table
+                      layout. One 1-D array per attribute (status, pdg_id,
+                      mothers, daughters, color tags, E/px/py/pz/m) plus
+                      an ``event_offsets`` array of length n_events + 1
+                      such that particles of event i live in rows
+                      ``event_offsets[i] : event_offsets[i+1]``. Disabled
+                      via ``--no-event-record``.
     metadata.json     run configuration and per-step shape summary.
 
 These are plain numpy files so the script has no torch dependency and can
@@ -123,11 +130,15 @@ def extract_snapshots(event) -> List[np.ndarray]:
     proxy for branching time order under PYTHIA's pT-ordered shower.
 
     The algorithm walks the event record forward starting just after the
-    initial Z -> q qbar pair. A "branching" is identified as a maximal run of
-    consecutive entries whose mother1() is in the current active set; this
-    captures the 2 status-51 daughters of the emitter and (when present) the
-    single status-52 daughter of the recoiler in PYTHIA's default pT-ordered
-    dipole shower, without relying on the exact status codes.
+    initial Z -> q qbar pair. A "branching" is the run of consecutive entries
+    whose mother1() is in the current active set, terminated by the first
+    entry with |status| == 52 (the recoiler). This captures the 2 status-51
+    daughters of the emitter followed by the single status-52 recoiler in
+    PYTHIA's pT-ordered dipole shower. The recoiler-as-terminator is required
+    because several consecutive branchings can land in adjacent record slots
+    while all of their mother indices are still in `active`; without the
+    terminator the inner loop would greedily lump them into one step and
+    then fail the +1-parton count check.
     """
     initial = find_initial_zqq(event)
     if len(initial) != 2:
@@ -149,7 +160,14 @@ def extract_snapshots(event) -> List[np.ndarray]:
         while j < size and event[j].mother1() in active:
             new_idx.append(j)
             mothers_replaced.add(event[j].mother1())
+            status_added = event[j].status()
             j += 1
+            # End of one shower step: the recoiler is the |status|==52 entry,
+            # and it always comes last in the three-entry FSR branching
+            # record. Without this break, consecutive branchings whose
+            # mothers are all still in `active` get lumped together.
+            if abs(status_added) == 52:
+                break
         active -= mothers_replaced
         active |= set(new_idx)
         # Each FSR branching should add exactly one parton overall.
@@ -179,7 +197,33 @@ def parse_args() -> argparse.Namespace:
                         default=Path("pythia_zqq_splittings"))
     parser.add_argument("--tolerance", type=float, default=1e-6,
                         help="Per-component conservation tolerance (GeV).")
+    parser.add_argument("--no-event-record", dest="save_event_record",
+                        action="store_false", default=True,
+                        help="Skip saving the full per-particle event record "
+                             "(event_record.npz). Saves time and disk if you "
+                             "only need the per-branching snapshots.")
     return parser.parse_args()
+
+
+# Per-particle attributes pulled from the PYTHIA event record. Keep this list
+# in one place so the buffer init, the per-event fill, and the savez payload
+# all stay in sync.
+RECORD_FIELDS: Tuple[Tuple[str, str, type], ...] = (
+    # (column name,        Particle accessor,  numpy dtype)
+    ("status",             "status",           np.int32),
+    ("pdg_id",             "id",               np.int32),
+    ("mother1",            "mother1",          np.int32),
+    ("mother2",            "mother2",          np.int32),
+    ("daughter1",          "daughter1",        np.int32),
+    ("daughter2",          "daughter2",        np.int32),
+    ("col",                "col",              np.int32),
+    ("acol",               "acol",             np.int32),
+    ("e",                  "e",                np.float32),
+    ("px",                 "px",               np.float32),
+    ("py",                 "py",               np.float32),
+    ("pz",                 "pz",               np.float32),
+    ("m",                  "m",                np.float32),
+)
 
 
 def main() -> None:
@@ -200,12 +244,32 @@ def main() -> None:
     n_skipped = 0
     report_every = max(1, args.n_events // 20)
 
+    # Full per-particle event-record buffers. One Python list per column; we
+    # concatenate to numpy at the end. event_id_buf is parallel to the other
+    # columns; event_offsets[i] : event_offsets[i+1] is the row range of
+    # event i. Both are populated only when args.save_event_record is True.
+    record_cols: Dict[str, list] = (
+        {name: [] for name, _, _ in RECORD_FIELDS} if args.save_event_record else {}
+    )
+    event_id_buf: List[int] = []
+    event_offsets: List[int] = [0]
+
     for iev in range(args.n_events):
         if not pythia.next():
             n_skipped += 1
             continue
         n_generated += 1
-        for step, snap in enumerate(extract_snapshots(pythia.event), start=1):
+        event = pythia.event
+        if args.save_event_record:
+            # event index 0 is the system entry in PYTHIA; iterate over
+            # real particle slots [1, size).
+            for k in range(1, event.size()):
+                p = event[k]
+                for name, accessor, _ in RECORD_FIELDS:
+                    record_cols[name].append(getattr(p, accessor)())
+                event_id_buf.append(iev)
+            event_offsets.append(len(event_id_buf))
+        for step, snap in enumerate(extract_snapshots(event), start=1):
             buffers[step].append((iev, snap))
         if (iev + 1) % report_every == 0:
             print(f"  ... event {iev + 1} / {args.n_events}")
@@ -262,6 +326,33 @@ def main() -> None:
             "shape": list(arr.shape),
             "max_conservation_deviation_GeV": max_dev,
             "rows_outside_tolerance": n_bad,
+        }
+
+    if args.save_event_record:
+        event_id_arr = np.asarray(event_id_buf, dtype=np.int64)
+        offsets_arr = np.asarray(event_offsets, dtype=np.int64)
+        record_arrays = {
+            name: np.asarray(record_cols[name], dtype=dtype)
+            for name, _, dtype in RECORD_FIELDS
+        }
+        record_arrays["event_id"] = event_id_arr
+        record_arrays["event_offsets"] = offsets_arr
+
+        record_path = args.output_dir / "event_record.npz"
+        np.savez(record_path, **record_arrays)
+        n_particles = int(event_id_arr.shape[0])
+        n_events_in_record = int(offsets_arr.shape[0] - 1)
+        print(f"  event record: {n_events_in_record} events, "
+              f"{n_particles} particle rows -> {record_path.name}")
+        metadata["event_record"] = {
+            "file": record_path.name,
+            "n_events": n_events_in_record,
+            "n_particles": n_particles,
+            "columns": sorted(record_arrays.keys()),
+            "note": ("event i occupies rows "
+                     "event_offsets[i] : event_offsets[i+1] in every column "
+                     "(particle indices within an event are implicit in row "
+                     "order, starting at PYTHIA slot 1)."),
         }
 
     with open(args.output_dir / "metadata.json", "w") as f:
