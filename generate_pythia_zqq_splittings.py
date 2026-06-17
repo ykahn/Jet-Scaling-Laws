@@ -88,6 +88,10 @@ def configure_pythia(seed: int, ecm: float) -> "pythia8.Pythia":
         "PartonLevel:MPI = off",
         # Keep final-state radiation on so we actually have splittings.
         "PartonLevel:FSR = on",
+        # turn off all QED showers
+        "TimeShower:QEDshowerByQ = off",
+        "TimeShower:QEDshowerByL = off",
+        "TimeShower:QEDshowerByGamma = off",
         # Stop at parton level: no hadronization, no hadron decays.
         "HadronLevel:all = off",
         # Quiet banner / per-event info.
