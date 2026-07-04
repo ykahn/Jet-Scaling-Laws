@@ -15,6 +15,13 @@ Outputs (written to --output-dir):
                       original PYTHIA event index for each row of
                       splittings_k.npy (so the same event can be tracked
                       across snapshot files).
+    splittings_all.npy  float32, shape (n_events, 2 + max_step, 4)
+                      one row per event = its final (fully-showered) parton
+                      state, zero-padded along the parton axis to the global
+                      maximum multiplicity. Trailing all-zero rows are padding
+                      (inert for EFPs/thrust). Accompanied by event_ids_all.npy
+                      and n_partons_all.npy (int32, the real parton count per
+                      event, i.e. how many leading rows are non-padding).
     event_record.npz  full per-particle PYTHIA event listing, flat-table
                       layout. One 1-D array per attribute (status, pdg_id,
                       mothers, daughters, color tags, E/px/py/pz/m) plus
@@ -257,6 +264,9 @@ def main() -> None:
     )
     event_id_buf: List[int] = []
     event_offsets: List[int] = [0]
+    # (event_id, final-state snapshot) for the combined all-events file: the
+    # last (largest-step) snapshot is the event's fully-showered parton state.
+    final_snaps: List[Tuple[int, np.ndarray]] = []
 
     for iev in range(args.n_events):
         if not pythia.next():
@@ -273,8 +283,11 @@ def main() -> None:
                     record_cols[name].append(getattr(p, accessor)())
                 event_id_buf.append(iev)
             event_offsets.append(len(event_id_buf))
-        for step, snap in enumerate(extract_snapshots(event), start=1):
+        snaps = extract_snapshots(event)
+        for step, snap in enumerate(snaps, start=1):
             buffers[step].append((iev, snap))
+        if snaps:
+            final_snaps.append((iev, snaps[-1]))
         if (iev + 1) % report_every == 0:
             print(f"  ... event {iev + 1} / {args.n_events}")
 
@@ -330,6 +343,42 @@ def main() -> None:
             "shape": list(arr.shape),
             "max_conservation_deviation_GeV": max_dev,
             "rows_outside_tolerance": n_bad,
+        }
+
+    # Combined all-events file: one row per event = its final (fully-showered)
+    # parton state, zero-padded along the parton axis to the global maximum
+    # multiplicity (2 + max_step). Trailing all-zero rows are padding, inert for
+    # EFPs/thrust (energy fraction z = 0). n_partons_all.npy gives the real
+    # (unpadded) parton count per event.
+    if final_snaps:
+        max_p = max(s.shape[0] for _, s in final_snaps)
+        n_ev = len(final_snaps)
+        all_arr = np.zeros((n_ev, max_p, 4), dtype=np.float32)
+        all_ids = np.empty(n_ev, dtype=np.int64)
+        all_np = np.empty(n_ev, dtype=np.int32)
+        all_dev = 0.0
+        for row, (eid, s) in enumerate(final_snaps):
+            all_arr[row, :s.shape[0]] = s.astype(np.float32)
+            all_ids[row] = eid
+            all_np[row] = s.shape[0]
+            all_dev = max(all_dev, float(np.abs(s.sum(axis=0) - expected).max()))
+        np.save(args.output_dir / "splittings_all.npy", all_arr)
+        np.save(args.output_dir / "event_ids_all.npy", all_ids)
+        np.save(args.output_dir / "n_partons_all.npy", all_np)
+        print(f"  all-events: N = {n_ev:7d}  shape = {tuple(all_arr.shape)}  "
+              f"(padded to {max_p} partons)  "
+              f"max |sum p - p_Z| = {all_dev:.3e} GeV")
+        metadata["all_events_file"] = {
+            "snapshot_file": "splittings_all.npy",
+            "event_ids_file": "event_ids_all.npy",
+            "n_partons_file": "n_partons_all.npy",
+            "shape": list(all_arr.shape),
+            "max_partons": int(max_p),
+            "max_conservation_deviation_GeV": all_dev,
+            "note": ("final (fully-showered) parton state per event, zero-padded "
+                     "to 2 + max_step partons; trailing all-zero rows are padding "
+                     "(inert for EFPs/thrust). n_partons_all[i] is the real parton "
+                     "count for event event_ids_all[i]."),
         }
 
     if args.save_event_record:
