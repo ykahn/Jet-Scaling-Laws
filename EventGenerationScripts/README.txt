@@ -1,0 +1,2 @@
+generate_pythia_zqq_splittings.py is self-contained
+pythia_snapshot_common.py is the driver for generate_pythia_flavor
