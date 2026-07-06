@@ -1,0 +1,3 @@
+The notebooks in this folder are WhitenedRidge_Main.ipynb [only the main results] and WhitenedRidge_Extended.ipynb [includes some sanity checks, and an extra, shown not to work, fitting method].
+The codes are stand-alone so long as the PYTHIA files are available (loaded in the first python cell).
+The codes create folders _curve_cache [result of ridge-regression; time consuming for large P's] which I have uploaded, and _efp_scratch [EFPs for data-sets] which I have not included. The latter is needed for some of plot 2, and so it takes ~15 min to run the notebook. Once run locally, it will make the _efp_scratch cache so the next run will be short.
