@@ -1,46 +1,55 @@
 // gen_Zqq.cc
-// Particle gun: two back-to-back light quarks (d/dbar) at E = mZ/2 each,
-// color-singlet configuration matching Z->qqbar. Pythia showers and hadronizes them.
-// Symmetric setup to gen_Hgg.cc — only physical difference is quark vs gluon color factor.
+// Particle gun: two back-to-back d/dbar quarks at E = mZ/2 each.
+// QCD FSR on, QED off, hadronization off.
 //
-// Writes 10,000 events to ../data/Zqq_events.txt
-// Format: one line per final-state visible particle (E px py pz), blank line between events.
+// Writes 100000 events to ../data/Zqq_events.txt
+// Format: one line per final-state particle (E px py pz), blank line between events.
 
 #include "Pythia8/Pythia.h"
 #include <fstream>
 using namespace Pythia8;
 
 int main() {
-    const double mZ   = 91.188;
+    const double mZ    = 91.188;
     const double Equark = mZ / 2.0;
 
     Pythia pythia;
-
+// Skip hard scatter generation
     pythia.readString("ProcessLevel:all = off");
     pythia.settings.parm("Beams:eCM", mZ);
 
     pythia.readString("PartonLevel:ISR = off");
     pythia.readString("PartonLevel:MPI = off");
+    pythia.readString("PartonLevel:FSR = on");
+// No QED in FSR
+    pythia.readString("TimeShower:QEDshowerByQ = off");
+    pythia.readString("TimeShower:QEDshowerByL = off");
+    pythia.readString("TimeShower:QEDshowerByGamma = off");
+// Stop at parton level: no hadronization, no hadron decays.
+    pythia.readString("HadronLevel:all = off");
+
 
     pythia.readString("Next:numberCount = 1000");
-
     pythia.init();
 
+// open .txt file 
     std::ofstream out("../data/Zqq_events.txt");
     const int nEvents = 100000;
     int nWritten = 0;
 
     for (int iEvent = 0; iEvent < nEvents; ++iEvent) {
         pythia.event.reset();
-
-        // Two back-to-back d/dbar quarks, color-singlet flow (matching Z->qqbar).
-        // Long form: (id, status, m1, m2, d1, d2, col, acol, px, py, pz, e, m)
-        // Status 23 = outgoing hard-process particle -> gets FSR from Pythia.
+// initial state
         pythia.event.append( 1, 23, 0, 0, 0, 0, 101,   0,  0., 0.,  Equark, Equark, 0.);
         pythia.event.append(-1, 23, 0, 0, 0, 0,   0, 101,  0., 0., -Equark, Equark, 0.);
-
+        pythia.event[1].scale(Equark);
+        pythia.event[2].scale(Equark);
+        pythia.event.scale(Equark);
+// run FSR shower explicitly on particles 1 and 2
+        pythia.forceTimeShower(1, 2, Equark);
         if (!pythia.next()) continue;
-
+        if (iEvent == 0) pythia.event.list();
+// write final state info to file, skipping neutrinos
         for (int i = 0; i < pythia.event.size(); ++i) {
             Particle& p = pythia.event[i];
             if (!p.isFinal()) continue;

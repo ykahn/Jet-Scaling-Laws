@@ -1,26 +1,35 @@
 // gen_Hgg.cc
-// Particle gun: two back-to-back gluons at E = mZ/2 each, in a color-singlet
-// configuration matching H(mH=mZ)->gg. Pythia showers and hadronizes them.
+// Particle gun: two back-to-back gluons at E = mZ/2 each (mH = mZ fiction).
+// QCD FSR on, QED off, hadronization off.
 //
-// Writes 10,000 events to ../data/Hgg_events.txt
-// Format: one line per final-state visible particle (E px py pz), blank line between events.
+// Writes 100000 events to ../data/Hgg_events.txt
+// Format: one line per final-state particle (E px py pz), blank line between events.
 
 #include "Pythia8/Pythia.h"
 #include <fstream>
 using namespace Pythia8;
 
 int main() {
-    const double mH    = 91.188;
-    const double Eglue = mH / 2.0;
+    const double mZ    = 91.188;
+    const double Eglue = mZ / 2.0;
 
     Pythia pythia;
 
+// Skip hard scatter generation
     pythia.readString("ProcessLevel:all = off");
-    pythia.settings.parm("Beams:eCM", mH);
+    pythia.settings.parm("Beams:eCM", mZ);
 
-    // No beam particles in the event, so disable ISR and MPI
     pythia.readString("PartonLevel:ISR = off");
     pythia.readString("PartonLevel:MPI = off");
+    pythia.readString("PartonLevel:FSR = on");
+
+// No QED in FSR
+    pythia.readString("TimeShower:QEDshowerByQ = off");
+    pythia.readString("TimeShower:QEDshowerByL = off");
+    pythia.readString("TimeShower:QEDshowerByGamma = off");
+
+// Stop at parton level: no hadronization, no hadron decays.
+    pythia.readString("HadronLevel:all = off");
 
     pythia.readString("Next:numberCount = 1000");
 
@@ -33,12 +42,13 @@ int main() {
     for (int iEvent = 0; iEvent < nEvents; ++iEvent) {
         pythia.event.reset();
 
-        // Two back-to-back gluons with a color-singlet flow (same as H->gg).
-        // Long form: (id, status, m1, m2, d1, d2, col, acol, px, py, pz, e, m)
-        // Status 23 = outgoing hard-process particle → gets FSR from Pythia.
         pythia.event.append(21, 23, 0, 0, 0, 0, 101, 102,  0., 0.,  Eglue, Eglue, 0.);
         pythia.event.append(21, 23, 0, 0, 0, 0, 102, 101,  0., 0., -Eglue, Eglue, 0.);
-
+        pythia.event[1].scale(Eglue);
+        pythia.event[2].scale(Eglue);
+        pythia.event.scale(Eglue);
+// run FSR shower explicitly on particles 1 and 2
+        pythia.forceTimeShower(1, 2, Eglue);
         if (!pythia.next()) continue;
 
         for (int i = 0; i < pythia.event.size(); ++i) {
