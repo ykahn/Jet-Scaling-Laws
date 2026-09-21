@@ -2,3 +2,6 @@
 .cache/
 __pycache__/
 *.pyc
+StevensCode/data/
+__pycache__/
+.DS_Store
