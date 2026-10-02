@@ -43,3 +43,12 @@ def compute_thrust_iterative(event, max_iter=20):
         if T > best_T:
             best_T = T
     return best_T
+
+## Invariant Mass pairs given an event 
+
+def pair_inv(ev):   # (n, N, 4) -> sorted s_ij, i<j
+    E, p = ev[..., 0], ev[..., 1:]
+    s = 2*(E[:, :, None]*E[:, None, :] - np.einsum('nia,nja->nij', p, p))
+    iu = np.triu_indices(ev.shape[1], 1)
+    return -np.sort(-s[:, iu[0], iu[1]], axis=1)
+
