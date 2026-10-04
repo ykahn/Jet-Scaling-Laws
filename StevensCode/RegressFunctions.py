@@ -5,6 +5,8 @@ from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
+from scipy.sparse.linalg import LinearOperator, eigsh
+
 
 
 
@@ -133,50 +135,6 @@ def fit_floor(P, losses, fit_min, fit_max, p0=None, fix_L_inf=None, err=None):
 
 
 
-########### Cengiz Eq 25, ****  written from Claude and not verified ***** #############
-def solve_kappa(eigs, P, λ):
-    """Renormalized ridge κ from Eq. 23 of arXiv:2405.00592:  κ(1 - (1/P) Σ η/(η+κ)) = λ."""
-    eigs = np.asarray(eigs, dtype=float)
-    f = lambda kap: kap * (1.0 - np.sum(eigs / (eigs + kap)) / P) - λ
-    hi = max(10 * eigs.max(), 10 * λ, 1.0)
-    while f(hi) < 0:
-        hi *= 10.0
-    return brentq(f, 1e-300, hi, rtol=1e-15, maxiter=500)
-
-
-def eg_theory(eigs, target_power, P, λ, sigma2=0.0):
-    """Generalization error, Eq. 25 of arXiv:2405.00592 (Atanasov, Zavatone-Veth, Pehlevan):
-
-        E_g = κ²/(1-γ) Σ_k  v_k² / (κ + η_k)²  +  σ² γ/(1-γ)
-
-    eigs         : η_k, covariance eigenvalues (linear) or Mercer eigenvalues (kernel).
-    target_power : v_k² = η_k * w_k², the target's power in eigenmode k.
-    λ            : ridge, in the same convention as ridge_fit (A = K + λ P I).
-
-    Takes the full spectrum, so it needs no power-law assumption. Returns (E_g, κ, γ)."""
-    eigs = np.asarray(eigs, dtype=float)
-    v2 = np.asarray(target_power, dtype=float)
-    kap = solve_kappa(eigs, P, λ)
-    gam = np.sum(eigs**2 / (eigs + kap)**2) / P
-    Eg = kap**2 / (1 - gam) * np.sum(v2 / (eigs + kap)**2) + sigma2 * gam / (1 - gam)
-    return Eg, kap, gam
-
-
-def spectrum_and_target(X, y, kernel=None):
-    """Mercer eigenvalues and per-mode target power (η_k, v_k²) for use with eg_theory.
-    For kernel != None the target must be projected onto the gram eigenvectors, so this
-    needs eigenvectors and is therefore more expensive than eigenvalues alone."""
-    Xs = torch.as_tensor(np.asarray(X), dtype=torch.float64)
-    K = ntk(Xs, Xs) if kernel == "NTK" else Xs @ Xs.T
-    M = len(Xs)
-    ev, U = np.linalg.eigh((K / M).numpy())
-    ev, U = ev[::-1], U[:, ::-1]
-    return np.clip(ev, 0.0, None), (U.T @ np.asarray(y, dtype=float))**2 / M
-
-
-
-
-
 # def run_sweep(X, y, w_true, r, Ns, n_repeats, push):
 #     excess_loss = []
 #     X = torch.as_tensor(X, dtype=torch.float64)
@@ -224,8 +182,69 @@ def kernel_spectrum(X, kernel=None, M=5000, seed=0):
     return np.linalg.eigvalsh((K / len(idx)).numpy())[::-1]
 
 
+def kernel_spectrum_lanczos(X, k=2000, chunk=5000, dev='cuda'):   # top-k NTK eigenvalues using all N rows, never forms NxN
+    X = torch.as_tensor(X, dtype=torch.float64, device=dev)
+    def Kv(v):
+        v = torch.as_tensor(np.asarray(v, dtype=np.float64), device=dev).ravel(); 
+        out = torch.empty(len(X), dtype=torch.float64, device=dev)
+        for i in range(0, len(X), chunk): out[i:i+chunk] = ntk(X[i:i+chunk], X) @ v
+        return (out / len(X)).cpu().numpy()
+    return eigsh(LinearOperator((len(X), len(X)), matvec=Kv, dtype=np.float64), k=k, which='LA', return_eigenvectors=False)[::-1]
+
+
 def fit_spectrum_exponent(ev, lo=10, hi=None):
     """Fit ev[i] ~ i**-b over the reliable window; b is your effective 'a'."""
     hi = hi or len(ev) // 4
     i = np.arange(lo, hi)
     return -np.polyfit(np.log(i + 1.), np.log(ev[lo:hi]), 1)[0]
+
+
+
+
+
+
+
+
+
+
+
+########### Cengiz Eq 25, ****  written from Claude and not verified ***** #############
+def solve_kappa(eigs, P, λ):
+    """Renormalized ridge κ from Eq. 23 of arXiv:2405.00592:  κ(1 - (1/P) Σ η/(η+κ)) = λ."""
+    eigs = np.asarray(eigs, dtype=float)
+    f = lambda kap: kap * (1.0 - np.sum(eigs / (eigs + kap)) / P) - λ
+    hi = max(10 * eigs.max(), 10 * λ, 1.0)
+    while f(hi) < 0:
+        hi *= 10.0
+    return brentq(f, 1e-300, hi, rtol=1e-15, maxiter=500)
+
+
+def eg_theory(eigs, target_power, P, λ, sigma2=0.0):
+    """Generalization error, Eq. 25 of arXiv:2405.00592 (Atanasov, Zavatone-Veth, Pehlevan):
+
+        E_g = κ²/(1-γ) Σ_k  v_k² / (κ + η_k)²  +  σ² γ/(1-γ)
+
+    eigs         : η_k, covariance eigenvalues (linear) or Mercer eigenvalues (kernel).
+    target_power : v_k² = η_k * w_k², the target's power in eigenmode k.
+    λ            : ridge, in the same convention as ridge_fit (A = K + λ P I).
+
+    Takes the full spectrum, so it needs no power-law assumption. Returns (E_g, κ, γ)."""
+    eigs = np.asarray(eigs, dtype=float)
+    v2 = np.asarray(target_power, dtype=float)
+    kap = solve_kappa(eigs, P, λ)
+    gam = np.sum(eigs**2 / (eigs + kap)**2) / P
+    Eg = kap**2 / (1 - gam) * np.sum(v2 / (eigs + kap)**2) + sigma2 * gam / (1 - gam)
+    return Eg, kap, gam
+
+
+def spectrum_and_target(X, y, kernel=None):
+    """Mercer eigenvalues and per-mode target power (η_k, v_k²) for use with eg_theory.
+    For kernel != None the target must be projected onto the gram eigenvectors, so this
+    needs eigenvectors and is therefore more expensive than eigenvalues alone."""
+    Xs = torch.as_tensor(np.asarray(X), dtype=torch.float64)
+    K = ntk(Xs, Xs) if kernel == "NTK" else Xs @ Xs.T
+    M = len(Xs)
+    ev, U = np.linalg.eigh((K / M).numpy())
+    ev, U = ev[::-1], U[:, ::-1]
+    return np.clip(ev, 0.0, None), (U.T @ np.asarray(y, dtype=float))**2 / M
+

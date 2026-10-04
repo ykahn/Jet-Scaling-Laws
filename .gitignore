@@ -5,3 +5,5 @@ __pycache__/
 StevensCode/data/
 __pycache__/
 .DS_Store
+StevensCode/data
+StevensCode/features/
