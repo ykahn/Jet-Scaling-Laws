@@ -134,35 +134,16 @@ def fit_floor(P, losses, fit_min, fit_max, p0=None, fix_L_inf=None, err=None):
 
 
 
-
-# def run_sweep(X, y, w_true, r, Ns, n_repeats, push):
-#     excess_loss = []
-#     X = torch.as_tensor(X, dtype=torch.float64)
-#     y = torch.as_tensor(y, dtype=torch.float64)
-#     for i, N in enumerate(Ns):
-#         print(f'on N {i} out of {len(Ns)}')
-#         losses = []
-#         w_true = torch.as_tensor(w_true, dtype=torch.float64)
-#         for _ in range(n_repeats(N)):
-#             X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=N)
-#             w_hat = ridge_fit(X_train, y_train, r, push)
-#             losses.append(torch.mean((X_test @ (w_hat - w_true)) ** 2).item())
-#         excess_loss.append(np.mean(losses))
-#     return np.array(excess_loss)
+def preprocess(Z): # drops constants, centers * /std
+    Z = Z[:, Z.std(0) > 0]                      # drop constant columns (d=0 EFP, β=2 constants, all-zero Q entries)
+    Z = (Z - Z.mean(0)) / Z.std(0)              # standardize each column
+    return Z / np.linalg.norm(Z, axis=1, keepdims=True)   # unit-normalize each event
 
 
 
 #########################
 #### ===== NTK ===== #### 
 #########################
-
-## Plot NTK Spectrum ## 
-
-
-def preprocess(Z):
-    Z = Z[:, Z.std(0) > 0]                      # drop constant columns (d=0 EFP, β=2 constants, all-zero Q entries)
-    Z = (Z - Z.mean(0)) / Z.std(0)              # standardize each column
-    return Z / np.linalg.norm(Z, axis=1, keepdims=True)   # unit-normalize each event
 
 def ntk(x, xp):
     nx, nxp = x.norm(dim=1, keepdim=True), xp.norm(dim=1, keepdim=True)
@@ -172,12 +153,25 @@ def ntk(x, xp):
     return (nx * nxp.T) * (torch.sin(th) + 2*(torch.pi - th)*u) / (2*torch.pi)
 
 
+#############################
+#### ===== Laplace ===== #### 
+#############################
+
+def laplace(x, xp, ell=1.0):   # K(x, x') = exp(-|x - x'| / ell)
+    return torch.exp(-torch.cdist(x, xp) / ell)
+
+
+
+##################################################
+#### ===== Compute Kernel Eigenspectrum ===== #### 
+##################################################
+
 def kernel_spectrum(X, kernel=None, M=5000, seed=0):
     """Empirical Mercer spectrum under the distribution of rows of X."""
     rng = np.random.default_rng(seed)
     idx = rng.choice(len(X), min(M, len(X)), replace=False)
     Xs = torch.as_tensor(np.asarray(X)[idx], dtype=torch.float64)
-    K = ntk(Xs, Xs) if kernel == "NTK" else Xs @ Xs.T
+    K = ntk(Xs, Xs) if kernel == "NTK" else laplace(Xs, Xs) if kernel == "Laplace" else Xs @ Xs.T
     # return np.clip(np.linalg.eigvalsh((K / len(idx)).numpy())[::-1], 1e-300, None)
     return np.linalg.eigvalsh((K / len(idx)).numpy())[::-1]
 
@@ -197,11 +191,6 @@ def fit_spectrum_exponent(ev, lo=10, hi=None):
     hi = hi or len(ev) // 4
     i = np.arange(lo, hi)
     return -np.polyfit(np.log(i + 1.), np.log(ev[lo:hi]), 1)[0]
-
-
-
-
-
 
 
 
