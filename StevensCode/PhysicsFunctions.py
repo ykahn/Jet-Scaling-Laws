@@ -52,3 +52,10 @@ def pair_inv(ev):   # (n, N, 4) -> sorted s_ij, i<j
     iu = np.triu_indices(ev.shape[1], 1)
     return -np.sort(-s[:, iu[0], iu[1]], axis=1)
 
+
+
+### Larkowski QCD School Notes Eq. 56
+def dim_QCD_qq(Q, alpha_s): 
+    CF = 4/3
+    return -16*alpha_s*CF/np.pi*np.log(Q) - 6*alpha_s*CF/np.pi
+
