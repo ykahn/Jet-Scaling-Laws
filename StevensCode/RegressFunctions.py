@@ -176,12 +176,13 @@ def kernel_spectrum(X, kernel=None, M=5000, seed=0):
     return np.linalg.eigvalsh((K / len(idx)).numpy())[::-1]
 
 
-def kernel_spectrum_lanczos(X, k=2000, chunk=5000, dev='cuda'):   # top-k NTK eigenvalues using all N rows, never forms NxN
+def kernel_spectrum_lanczos(X, kernel=None, k=2000, chunk=5000, dev='cuda'):   # top-k NTK eigenvalues using all N rows, never forms NxN
     X = torch.as_tensor(X, dtype=torch.float64, device=dev)
+    K = ntk if kernel == "NTK" else laplace if kernel == "Laplace" else None
     def Kv(v):
         v = torch.as_tensor(np.asarray(v, dtype=np.float64), device=dev).ravel(); 
         out = torch.empty(len(X), dtype=torch.float64, device=dev)
-        for i in range(0, len(X), chunk): out[i:i+chunk] = ntk(X[i:i+chunk], X) @ v
+        for i in range(0, len(X), chunk): out[i:i+chunk] = K(X[i:i+chunk], X) @ v
         return (out / len(X)).cpu().numpy()
     return eigsh(LinearOperator((len(X), len(X)), matvec=Kv, dtype=np.float64), k=k, which='LA', return_eigenvectors=False)[::-1]
 
