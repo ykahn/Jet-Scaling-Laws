@@ -7,9 +7,10 @@
 
 #include "Pythia8/Pythia.h"
 #include <fstream>
+#include <string> 
 using namespace Pythia8;
 
-int main() {
+int main(int argc, char* argv[]) {
     const double mZ    = 91.188;
     const double Equark = mZ / 2.0;
 
@@ -27,13 +28,19 @@ int main() {
     pythia.readString("TimeShower:QEDshowerByGamma = off");
 // Stop at parton level: no hadronization, no hadron decays.
     pythia.readString("HadronLevel:all = off");
-
+// fix alpha 
+    double alphaS = (argc > 1) ? atof(argv[1]) : 0.1365;           // ./gen_Zqq 0.12
+    int    order  = (argc > 2) ? atoi(argv[2]) : 1;             // 0 = fixed, 1 = one-loop running (Pythia default)
+    pythia.settings.mode("TimeShower:alphaSorder", order);      // mode() for ints, not parm(); delete the readString line above it
+    pythia.settings.parm("TimeShower:alphaSvalue", alphaS);
 
     pythia.readString("Next:numberCount = 1000");
     pythia.init();
 
 // open .txt file 
-    std::ofstream out("../data/Zqq_events.txt");
+    std::string tag = (argc > 1 ? std::string(argv[1]) : "0.1365") + (order == 0 ? "_fixed" : "_run");
+    std::string fname = "../data/Zqq_events_as" + tag + ".txt";
+    std::ofstream out(fname);
     const int nEvents = 100000;
     int nWritten = 0;
 
@@ -63,7 +70,7 @@ int main() {
     }
 
     out.close();
-    std::cout << "Wrote " << nWritten << " events to ../data/Zqq_events.txt\n";
+    std::cout << "Wrote " << nWritten << " events to " + fname;
     pythia.stat();
     return 0;
 }
