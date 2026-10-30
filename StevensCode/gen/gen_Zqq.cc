@@ -11,7 +11,8 @@
 using namespace Pythia8;
 
 int main(int argc, char* argv[]) {
-    const double mZ    = 91.188;
+    // const double mZ    = 91.188;
+    const double mZ    = (argc > 3) ? atof(argv[3]) : 91.188;      // sqrt(s) as 3rd argument
     const double Equark = mZ / 2.0;
 
     Pythia pythia;
@@ -38,7 +39,8 @@ int main(int argc, char* argv[]) {
     pythia.init();
 
 // open .txt file 
-    std::string tag = (argc > 1 ? std::string(argv[1]) : "0.1365") + (order == 0 ? "_fixed" : "_run");
+    std::string tag = (argc > 1 ? std::string(argv[1]) : "0.1365") + (order == 0 ? "_fixed" : "_run")
+                    + (argc > 3 ? "_E" + std::string(argv[3]) : "");
     std::string fname = "../data/Zqq_events_as" + tag + ".txt";
     std::ofstream out(fname);
     const int nEvents = 100000;
