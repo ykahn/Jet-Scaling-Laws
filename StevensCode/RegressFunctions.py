@@ -131,9 +131,6 @@ def fit_floor(P, losses, fit_min, fit_max, p0=None, fix_L_inf=None, err=None):
 
 
 
-
-
-
 def preprocess(Z): # drops constants, centers * /std
     Z = Z[:, Z.std(0) > 0]                      # drop constant columns (d=0 EFP, β=2 constants, all-zero Q entries)
     Z = (Z - Z.mean(0)) / Z.std(0)              # standardize each column
@@ -145,12 +142,25 @@ def preprocess(Z): # drops constants, centers * /std
 #### ===== NTK ===== #### 
 #########################
 
-def ntk(x, xp):
+# def ntk(x, xp):
+#     nx, nxp = x.norm(dim=1, keepdim=True), xp.norm(dim=1, keepdim=True)
+#     u = (x @ xp.T / (nx * nxp.T)).clamp(-1, 1)
+#     # u = x @ xp.T / (nx * nxp.T)
+#     th = torch.arccos(u)
+#     return (nx * nxp.T) * (torch.sin(th) + 2*(torch.pi - th)*u) / (2*torch.pi)
+
+def ntk(x, xp, depth=1):
+    """NTK of a bias-free ReLU MLP with `depth` hidden layers (He init). depth=1 is the old 2-layer kernel (x2)."""
     nx, nxp = x.norm(dim=1, keepdim=True), xp.norm(dim=1, keepdim=True)
-    u = (x @ xp.T / (nx * nxp.T)).clamp(-1, 1)
-    # u = x @ xp.T / (nx * nxp.T)
-    th = torch.arccos(u)
-    return (nx * nxp.T) * (torch.sin(th) + 2*(torch.pi - th)*u) / (2*torch.pi)
+    norm = nx * nxp.T
+    S = x @ xp.T                                                     # Sigma^(0): input Gram
+    Th = S.clone()                                                   # Theta^(0)
+    for _ in range(depth):
+        u = (S / norm).clamp(-1, 1);  th = torch.arccos(u)
+        Sdot = (torch.pi - th) / torch.pi                            # E[σ'σ'] (He-normalised)
+        S = norm * (torch.sin(th) + (torch.pi - th) * u) / torch.pi  # E[σσ]: next-layer Gram
+        Th = Th * Sdot + S                                           # Theta^(l) = Theta^(l-1) Sdot^(l) + Sigma^(l)
+    return Th
 
 
 #############################
@@ -166,12 +176,12 @@ def laplace(x, xp, ell=1.0):   # K(x, x') = exp(-|x - x'| / ell)
 #### ===== Compute Kernel Eigenspectrum ===== #### 
 ##################################################
 
-def kernel_spectrum(X, kernel=None, M=5000, seed=0):
+def kernel_spectrum(X, kernel=None, depth=1, M=5000, seed=0):
     """Empirical Mercer spectrum under the distribution of rows of X."""
     rng = np.random.default_rng(seed)
     idx = rng.choice(len(X), min(M, len(X)), replace=False)
     Xs = torch.as_tensor(np.asarray(X)[idx], dtype=torch.float64)
-    K = ntk(Xs, Xs) if kernel == "NTK" else laplace(Xs, Xs) if kernel == "Laplace" else Xs @ Xs.T
+    K = ntk(Xs, Xs, depth) if kernel == "NTK" else laplace(Xs, Xs) if kernel == "Laplace" else Xs @ Xs.T
     # return np.clip(np.linalg.eigvalsh((K / len(idx)).numpy())[::-1], 1e-300, None)
     return np.linalg.eigvalsh((K / len(idx)).numpy())[::-1]
 
@@ -187,11 +197,18 @@ def kernel_spectrum_lanczos(X, kernel=None, k=2000, chunk=5000, dev='cuda'):   #
     return eigsh(LinearOperator((len(X), len(X)), matvec=Kv, dtype=np.float64), k=k, which='LA', return_eigenvectors=False)[::-1]
 
 
-def fit_spectrum_exponent(ev, lo=10, hi=None):
-    """Fit ev[i] ~ i**-b over the reliable window; b is your effective 'a'."""
-    hi = hi or len(ev) // 4
-    i = np.arange(lo, hi)
-    return -np.polyfit(np.log(i + 1.), np.log(ev[lo:hi]), 1)[0]
+## Takes \lambda_i --> Gives you slope \alpha 
+def alpha_eig(ev, lo=20, hi=400):
+    k = np.arange(1, len(ev)+1)
+    return -np.polyfit(np.log(k[lo:hi]), np.log(ev[lo:hi]), 1)[0]
+
+## Takes \lambda_i --> Gives you slope \alpha (uses cumulative sum method, more accurate )
+def alpha(ev, lo=50, hi=1000):
+    tail = np.cumsum(ev[::-1])[::-1]; k = np.arange(1, len(tail)+1)
+    return 1 - np.polyfit(np.log(k[lo:hi]), np.log(tail[lo:hi]), 1)[0]
+
+
+
 
 
 
