@@ -7,3 +7,9 @@ __pycache__/
 .DS_Store
 StevensCode/data
 StevensCode/features/
+StevensCode/slurm-*.out
+StevensCode/Make_Features.py
+StevensCode/Q_NTK.py
+StevensCode/Q_SEMD_d.py
+StevensCode/Q_NN.py
+StevensCode/Measure_r.py
