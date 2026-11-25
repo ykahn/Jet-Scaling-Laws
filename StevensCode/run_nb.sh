@@ -4,9 +4,10 @@
 #SBATCH --mem=48G
 #SBATCH --time=03:00:00
 source ~/jsl-env/bin/activate
-python - "$@" <<'EOF'
+script="${SLURM_TMPDIR:-/tmp}/$1.${SLURM_JOB_ID:-local}.py"     # private copy for this job, so parallel jobs can't collide
+python - "$script" "$@" <<'EOF'
 import json, sys
-name, keep = sys.argv[1], sys.argv[2:]     # notebook name, then headings of the sections to run (none = all)
+script, name, keep = sys.argv[1], sys.argv[2], sys.argv[3:]     # output file, notebook name, headings of the sections to run (none = all)
 sec, out = '', []
 for c in json.load(open(name + '.ipynb'))['cells']:
     src = ''.join(c['source'])
@@ -14,7 +15,7 @@ for c in json.load(open(name + '.ipynb'))['cells']:
         if src.lstrip().startswith('#'): sec = src.split('\n')[0]
     elif not keep or not out or any(k in sec for k in keep):     # first code cell (imports) always runs
         out.append(src)
-open(name + '.py', 'w').write('\n\n'.join(out) + '\n')
+open(script, 'w').write('\n\n'.join(out) + '\n')
 EOF
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || echo "NO GPU"
-python -u "$1.py"
+PYTHONPATH="$PWD:$PYTHONPATH" python -u "$script"
